@@ -1,0 +1,440 @@
+{
+  "name": "test_ver4(time)",
+  "nodes": [
+    {
+      "parameters": {
+        "triggerTimes": {
+          "item": [
+            {
+              "hour": 9,
+              "minute": 3
+            }
+          ]
+        }
+      },
+      "id": "9294f1c5-df60-4993-b1fe-35319a69ffa7",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [
+        -464,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://news.google.com/rss?hl=ko&gl=KR&ceid=KR:ko",
+        "options": {}
+      },
+      "id": "a136877c-4204-4de6-969c-bf4b982f11dc",
+      "name": "RSS Feed Read - 메인 뉴스",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1,
+      "position": [
+        96,
+        -336
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://news.google.com/rss/search?q=%EB%A1%9C%EB%B4%87&hl=ko&gl=KR&ceid=KR:ko",
+        "options": {}
+      },
+      "id": "96b6234a-3032-493d-bc4b-3bcb40b19f53",
+      "name": "RSS Feed Read - 로봇",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1,
+      "position": [
+        96,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "// 뉴스 필터링 + 가중치 계산 + 출처별 그룹화 + 정렬\nconst start = new Date();\nstart.setDate(start.getDate() - 1);\nstart.setHours(9, 3, 0, 0);\n\nconst end = new Date();\nend.setHours(9, 2, 0, 0);\n\nconst keywordWeights = {\n  'ai 기본법': 6,\n  'ai 정책': 5,\n  'ai 규제': 5,\n  'ai 법안': 5,\n\n  // 일반 AI\n  'ai': 2,\n  '인공지능': 2,\n  'rag': 2,\n\n  // 기술\n  'LLM': 2,\n  '피지컬 ai': 2,\n  '로봇': 2,\n\n  // 신기술·디바이스\n  '웨어러블': 2,\n  '구글 글라스': 2,\n  '스마트 글래스': 2\n};\n\n// items: 이전 노드에서 들어온 뉴스 배열\nconst newsItems = items.map(item => item.json);\n\nlet processedItems = newsItems.map(item => {\n  const pubDate = new Date(item.pubDate || item.isoDate);\n  if (pubDate < start || pubDate > end) return null;\n\n  let title = item.title || '제목 없음';\n  const link = item.link || '#';\n  let text = (title + ' ' + (item.content || '')).toLowerCase();\n  let weight = 0;\n  let matchedKeywords = [];\n\n  for (const [kw, w] of Object.entries(keywordWeights)) {\n    const pattern = kw.toLowerCase().replace(/ /g, '\\\\s*');\n    const matches = text.match(new RegExp(pattern, 'gi'));\n    if (matches) {\n      weight += matches.length * w;\n      matchedKeywords.push(kw);\n    }\n  }\n\n  if (weight < 10) return null;\n\n  // 출처(source) 결정\n  let source = '';\n  const dashIndex = title.lastIndexOf(' - ');\n  if (dashIndex !== -1) {\n    source = title.substring(dashIndex + 3).trim();\n    title = title.substring(0, dashIndex).trim();\n  }\n\n  // 지디넷코리아 피드 URL이면 표시 이름 변경\n  if (link.includes('feeds.feedburner.com/zdkorea')) {\n    source = '지디넷코리아';\n  }\n\n  // 본문 안 지디넷코리아 키워드가 있으면 source 지정\n  const contentText = ((item.content || '') + ' ' + (item.description || '')).toLowerCase();\n  if (contentText.includes('지디넷코리아')) {\n    source = '지디넷코리아';\n  }\n\n  // source가 아직 비어있으면 링크에서 추출, 없으면 출처 미상\n  if (!source) {\n    try {\n      source = new URL(link).hostname.replace('www.', '');\n    } catch (e) {\n      source = '출처 미상';\n    }\n  }\n\n  return { source, title, link, weight, matchedKeywords };\n}).filter(item => item !== null);\n\n// 중복 제거 (link 또는 title 기준)\nprocessedItems = processedItems.filter((item, index, self) =>\n  index === self.findIndex(t => t.link === item.link || t.title === item.title)\n);\n\n// 출처별 그룹화 + 가중치 순 정렬\nconst sourceGroups = new Map();\nfor (const item of processedItems) {\n  if (!sourceGroups.has(item.source)) sourceGroups.set(item.source, []);\n  sourceGroups.get(item.source).push(item);\n}\n\nfor (const [source, articles] of sourceGroups.entries()) {\n  articles.sort((a, b) => b.weight - a.weight);\n}\n\n// 그룹 최고 점수 기준 정렬\nconst sortedSources = Array.from(sourceGroups.entries())\n  .map(([source, articles]) => ({\n    source,\n    articles,\n    maxWeight: Math.max(...articles.map(a => a.weight))\n  }))\n  .sort((a, b) => b.maxWeight - a.maxWeight);\n\nreturn [{ json: { sortedSources } }];\n"
+      },
+      "id": "ff785c69-dfdc-4109-a458-75d211f47d48",
+      "name": "Process Feeds",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        816,
+        288
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "osangeun404@gmail.com",
+        "toEmail": "silver_oh@kcisa.kr",
+        "subject": "={{$now.format(\"DD\")}} AI 뉴스레터 📈",
+        "html": "={{$json.emailBody}}",
+        "options": {}
+      },
+      "id": "c57cbabd-b6bb-4429-8986-8773dcbbefaa",
+      "name": "Send Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 1,
+      "position": [
+        1264,
+        288
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "AeZF78ce7ROf5eJV",
+          "name": "SMTP account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "numberInputs": 10
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        560,
+        160
+      ],
+      "id": "2e505ec9-e7d7-41f3-98ec-0ee16b6ea6e1",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "url": "https://news.google.com/rss/search?q=AI+%EA%B8%B0%EB%B3%B8%EB%B2%95&hl=ko&gl=KR&ceid=KR:ko",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1.2,
+      "position": [
+        96,
+        592
+      ],
+      "id": "7c8d722a-2494-48ff-a992-18a460669bac",
+      "name": "RSS Feed Read - AI기본법"
+    },
+    {
+      "parameters": {
+        "url": "https://news.google.com/rss/search?q=rag&hl=ko&gl=KR&ceid=KR:ko",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1.2,
+      "position": [
+        96,
+        736
+      ],
+      "id": "66399594-c08a-4d79-89de-737a2170b6e5",
+      "name": "RSS Feed Read - RAG"
+    },
+    {
+      "parameters": {
+        "url": "https://news.google.com/rss/search?q=AI&hl=ko&gl=KR&ceid=KR:ko",
+        "options": {}
+      },
+      "id": "eaaaaf6f-4cdf-4695-af07-d2fd972f1c51",
+      "name": "RSS Feed Read - AI",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1,
+      "position": [
+        96,
+        -192
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://news.google.com/rss/search?q=%EC%9D%B8%EA%B3%B5%EC%A7%80%EB%8A%A5&hl=ko&gl=KR&ceid=KR:ko",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1.2,
+      "position": [
+        96,
+        -32
+      ],
+      "id": "ebfedf02-8dca-4adc-8b95-3189f7431cc0",
+      "name": "RSS Feed Read - 인공지능"
+    },
+    {
+      "parameters": {
+        "url": "https://news.google.com/rss/search?q=%EC%83%9D%EC%84%B1%ED%98%95+AI&hl=ko&gl=KR&ceid=KR:ko",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1.2,
+      "position": [
+        96,
+        128
+      ],
+      "id": "2b761bda-7420-4e33-b6cd-5deba0e943af",
+      "name": "RSS Feed Read - 생성형 AI"
+    },
+    {
+      "parameters": {
+        "url": "https://feeds.feedburner.com/zdkorea",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1.2,
+      "position": [
+        96,
+        896
+      ],
+      "id": "87c2145d-d1ee-43c2-88a9-8b32eeadc1b1",
+      "name": "RSS Feed Read - 지디넷"
+    },
+    {
+      "parameters": {
+        "jsCode": "// 이전 노드에서 sortedSources 가져오기\nconst sortedSources = items[0].json.sortedSources;\n\nlet htmlList = '';\nfor (const { source, articles } of sortedSources) {\n  htmlList += `<h4 style=\"margin-top: 25px;\">📰 ${source}</h4><ul>`;\n  for (const article of articles) {\n    htmlList += `\n      <li style=\"margin-bottom: 10px;\">\n        <a href=\"${article.link}\" target=\"_blank\" style=\"color: #2c3e50; font-weight: bold;\">\n          ${article.title} (점수: ${article.weight}, 키워드: ${article.matchedKeywords.join(', ')})\n        </a>\n      </li>\n    `;\n  }\n  htmlList += '</ul>';\n}\n\nconst finalEmailBody = `\n<h3>안녕하세요! 매일 9시에 만나는 따끈따끈한 AI 뉴스 정리본입니다 🤖✨</h3>\n<p>지난 하루 동안(전일 오전 9시 ~ 금일 오전 9시) 주요 언론사에서 다룬 기사를 출처별로 모아봤습니다.<br>\n<p>※ 수신거부 / 키워드 추가·개선 의견: silver_oh@kcisa.kr</p>\n<p>※ 피드 개선 작업 진행 중🛠️(1.4.0.업데이트) <a href=\"https://github.com/osangeun404/n8n-AI-Stream\">\n릴리즈 노트📝</a></p>\n${htmlList}<br>\n<h3>오늘도 좋은 하루 보내세요! 필요할 땐 언제든 AI 뉴스가 달려갑니다 🚀</h3>\n`;\n\nreturn [{ json: { emailBody: finalEmailBody } }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1056,
+        288
+      ],
+      "id": "a5a91b39-8a4d-4bc4-ae6a-dad6836aedeb",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "url": "https://news.google.com/rss/search?q=%EC%A0%95%EC%B1%85+OR+%EA%B7%9C%EC%A0%9C+OR+%EB%B2%95&hl=ko&gl=KR&ceid=KR:ko",
+        "options": {}
+      },
+      "id": "a17eaba5-caf0-4b7d-84c9-0e8397bd36d6",
+      "name": "RSS Feed Read - 정책규제",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1,
+      "position": [
+        96,
+        432
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://news.google.com/rss/search?q=%ED%94%BC%EC%A7%80%EC%BB%AC+AI+OR+%22%EA%B5%AC%EA%B8%80+%EA%B8%80%EB%9D%BC%EC%8A%A4%22+OR+%22%EC%8A%A4%EB%A7%88%ED%8A%B8+%EA%B8%80%EB%9E%98%EC%8A%A4%22&hl=ko&gl=KR&ceid=KR:ko",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1.2,
+      "position": [
+        96,
+        1072
+      ],
+      "id": "715a5987-b367-487a-8f32-4a1630f5dc22",
+      "name": "RSS Feed Read - 피지컬, 글라스 등"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "RSS Feed Read - 메인 뉴스",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "RSS Feed Read - AI",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "RSS Feed Read - 로봇",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "RSS Feed Read - 정책규제",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "RSS Feed Read - AI기본법",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "RSS Feed Read - RAG",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "RSS Feed Read - 생성형 AI",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "RSS Feed Read - 인공지능",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "RSS Feed Read - 지디넷",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "RSS Feed Read - 피지컬, 글라스 등",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RSS Feed Read - 메인 뉴스": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RSS Feed Read - 로봇": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 4
+          }
+        ]
+      ]
+    },
+    "Process Feeds": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Process Feeds",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RSS Feed Read - AI기본법": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 6
+          }
+        ]
+      ]
+    },
+    "RSS Feed Read - RAG": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 7
+          }
+        ]
+      ]
+    },
+    "RSS Feed Read - AI": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "RSS Feed Read - 생성형 AI": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 3
+          }
+        ]
+      ]
+    },
+    "RSS Feed Read - 인공지능": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "RSS Feed Read - 지디넷": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 8
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Send Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RSS Feed Read - 정책규제": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 5
+          }
+        ]
+      ]
+    },
+    "RSS Feed Read - 피지컬, 글라스 등": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 9
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "f1e4ea88-0724-4bfd-b5a9-6248abf045d3",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "b43f27d40623084bcf6e4d728866371676af477b4ddc3175f9097d40527fcc5e"
+  },
+  "id": "BXugu5BWhmD54bbx",
+  "tags": []
+}
